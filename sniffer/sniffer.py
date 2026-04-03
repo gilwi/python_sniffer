@@ -299,7 +299,10 @@ def parse_args(args_in):
         help="Interactive mode to ask for options",
     )
     parser.add_argument(
-        "--interface", type=str, help="Interface name to sniff on (e.g., eth0, wlan0)"
+        "--interface",
+        type=str,
+        default="all",
+        help="Interface name to sniff on (e.g., eth0, wlan0). Default: all",
     )
     parser.add_argument(
         "-c",
@@ -390,12 +393,6 @@ def main():
 
     if interface == "all":
         interface = ""
-
-    if interface is None:
-        print(
-            "Error: Interface must be specified either via --interface or interactively using -i (use 'all' for all interfaces)."
-        )
-        sys.exit(1)
 
     s = setup_socket(interface)
     frameCount = 0
