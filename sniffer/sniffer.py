@@ -290,7 +290,7 @@ def fmt_ip6addr(ip6_addr):
     )
 
 
-def main():
+def parse_args(args_in):
     parser = argparse.ArgumentParser(description="A simple python sniffer")
     parser.add_argument(
         "-i",
@@ -308,40 +308,85 @@ def main():
         default=0,
         help="Number of frames to capture (0 for infinite)",
     )
-    args = parser.parse_args()
+    return parser.parse_args(args_in)
 
+
+def get_interface_interactively():
+    interfaces = socket.if_nameindex()
+    print("Available interfaces:")
+    for idx, name in interfaces:
+        print(f"  {idx}: {name}")
+
+    while True:
+        choice = input(
+            f"Enter interface name or index to sniff on ({interfaces[0][1]}): "
+        ).strip()
+
+        # Default fallback if just hit Enter
+        if not choice:
+            return interfaces[0][1]
+
+        # Check if it's an index or a generic name
+        if choice.isdigit():
+            idx = int(choice)
+            matched = [name for i, name in interfaces if i == idx]
+            if matched:
+                return matched[0]
+        else:
+            matched = [name for i, name in interfaces if name == choice]
+            if matched:
+                return matched[0]
+
+        print("Invalid interface. Please try again.")
+
+
+def setup_socket(interface):
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
+    if interface:
+        try:
+            s.bind((interface, socket.htons(3)))
+        except OSError as e:
+            print(f"Error binding to interface '{interface}': {e}")
+            sys.exit(1)
+    return s
+
+
+def handle_frame(message, addr, frame_id):
+    if_name = addr[0]
+    eth_header = L2Data(message[:14])
+    eth_payload = message[14:-4]
+
+    print()
+    print("-" * 100)
+    print("Frame id: {} | Interface: {}".format(frame_id, if_name))
+    print(repr(eth_header))
+
+    if eth_header.eth_type in ["0800", "86dd"]:
+        ip_req = IPData(eth_payload)
+        print()
+        print(repr(ip_req))
+
+        if ip_req.proto == 6:
+            tcp_req = TCPData(ip_req.payload)
+            print(repr(tcp_req))
+        elif ip_req.proto == 17:
+            udp_req = UDPData(ip_req.payload)
+            print(repr(udp_req))
+        elif ip_req.proto == 1:
+            icmp_req = ICMPData(ip_req.payload)
+            print(repr(icmp_req))
+    elif eth_header.eth_type == "0806":
+        arp_req = ArpData(eth_payload[:])
+        print()
+        print(repr(arp_req))
+
+
+def main():
+    args = parse_args(sys.argv[1:])
     interface = args.interface
 
     if args.interactive:
-        interfaces = socket.if_nameindex()
-        print("Available interfaces:")
-        for idx, name in interfaces:
-            print(f"  {idx}: {name}")
-
-        while True:
-            choice = input(
-                f"Enter interface name or index to sniff on ({interfaces[0][1]}): "
-            ).strip()
-
-            # Default fallback if just hit Enter
-            if not choice:
-                interface = interfaces[0][1]
-                break
-
-            # Check if it's an index or a generic name
-            if choice.isdigit():
-                idx = int(choice)
-                matched = [name for i, name in interfaces if i == idx]
-                if matched:
-                    interface = matched[0]
-                    break
-            else:
-                matched = [name for i, name in interfaces if name == choice]
-                if matched:
-                    interface = matched[0]
-                    break
-
-            print("Invalid interface. Please try again.")
+        interface = get_interface_interactively()
 
     if interface == "all":
         interface = ""
@@ -350,57 +395,25 @@ def main():
         print(
             "Error: Interface must be specified either via --interface or interactively using -i (use 'all' for all interfaces)."
         )
-        parser.print_help()
         sys.exit(1)
 
-    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
+    s = setup_socket(interface)
     frameCount = 0
-
-    if interface:
-        try:
-            s.bind((interface, socket.htons(3)))
-        except OSError as e:
-            print(f"Error binding to interface '{interface}': {e}")
-            sys.exit(1)
 
     print(f"Sniffing on {'all interfaces' if not interface else interface}...")
 
-    while True:
-        if args.count != 0 and frameCount >= args.count:
-            print(f"\nCaptured {args.count} frames. Exiting.")
-            break
+    try:
+        while True:
+            if args.count != 0 and frameCount >= args.count:
+                print(f"\nCaptured {args.count} frames. Exiting.")
+                break
 
-        message, addr = s.recvfrom(65535)
-        if_name = addr[0]
-
-        eth_header = L2Data(message[:14])
-        eth_payload = message[14:-4]
-
-        print()
-        print("-" * 100)
-        print("Frame id: {} | Interface: {}".format(frameCount, if_name))
-        print(repr(eth_header))
-
-        if eth_header.eth_type in ["0800", "86dd"]:
-            ip_req = IPData(eth_payload)
-            print()
-            print(repr(ip_req))
-
-            if ip_req.proto == 6:
-                tcp_req = TCPData(ip_req.payload)
-                print(repr(tcp_req))
-            elif ip_req.proto == 17:
-                udp_req = UDPData(ip_req.payload)
-                print(repr(udp_req))
-            elif ip_req.proto == 1:
-                icmp_req = ICMPData(ip_req.payload)
-                print(repr(icmp_req))
-        elif eth_header.eth_type == "0806":
-            arp_req = ArpData(eth_payload[:])
-            print()
-            print(repr(arp_req))
-
-        frameCount += 1
+            message, addr = s.recvfrom(65535)
+            handle_frame(message, addr, frameCount)
+            frameCount += 1
+    except KeyboardInterrupt:
+        print("\nStopping sniffer...")
+        sys.exit(0)
 
 
 if __name__ == "__main__":

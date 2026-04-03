@@ -6,6 +6,9 @@ WORKDIR /app
 # Copy the source code
 COPY . .
 
+# Install pytest for testing
+RUN pip install pytest
+
 # Ensure the sniffer script is executable
 RUN chmod +x sniffer/sniffer.py
 
