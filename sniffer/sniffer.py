@@ -301,6 +301,13 @@ def main():
     parser.add_argument(
         "--interface", type=str, help="Interface name to sniff on (e.g., eth0, wlan0)"
     )
+    parser.add_argument(
+        "-c",
+        "--count",
+        type=int,
+        default=0,
+        help="Number of frames to capture (0 for infinite)",
+    )
     args = parser.parse_args()
 
     interface = args.interface
@@ -359,6 +366,10 @@ def main():
     print(f"Sniffing on {'all interfaces' if not interface else interface}...")
 
     while True:
+        if args.count != 0 and frameCount >= args.count:
+            print(f"\nCaptured {args.count} frames. Exiting.")
+            break
+
         message, addr = s.recvfrom(65535)
         if_name = addr[0]
 
