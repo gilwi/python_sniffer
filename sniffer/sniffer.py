@@ -173,6 +173,27 @@ class UDPData:
         )
 
 
+class ICMPData:
+    def __init__(self, bytes):
+        self.__icmp_header = bytes
+        self.type, self.code, self.checksum = unpack("!BBH", self.__icmp_header[:4])
+        self.payload = self.__icmp_header[4:]
+
+        self.type_map = {
+            0: "Echo Reply",
+            3: "Destination Unreachable",
+            5: "Redirect",
+            8: "Echo Request",
+            11: "Time Exceeded",
+        }
+
+    def __repr__(self):
+        type_str = self.type_map.get(self.type, "Unknown Type")
+        return "ICMP: TYPE: {} ({}), CODE: {}, CHECKSUM: {}".format(
+            self.type, type_str, self.code, self.checksum
+        )
+
+
 class ArpData:
 
     def __init__(self, bytes):
@@ -360,6 +381,9 @@ def main():
             elif ip_req.proto == 17:
                 udp_req = UDPData(ip_req.payload)
                 print(repr(udp_req))
+            elif ip_req.proto == 1:
+                icmp_req = ICMPData(ip_req.payload)
+                print(repr(icmp_req))
         elif eth_header.eth_type == "0806":
             arp_req = ArpData(eth_payload[:])
             print()
