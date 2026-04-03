@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  sniffer:
+    build: .
+    network_mode: "host"
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    volumes:
+      - .:/app
+    stdin_open: true
+    tty: true
+    command: --interface all
