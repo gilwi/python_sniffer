@@ -9,8 +9,22 @@ Repository dedicated to python course with M. DECKER
  - A linux host
  - iproute2 or ifconfig usage to get interface name you want to sniff
  
-### Install / configure
+### Docker
 
- 1. clone project
- 2. change current directory to pythonLab/sniffer
- 3. ./sniffer.py
+Run with a single command:
+```bash
+docker compose up --build
+```
+
+### Vagrant
+
+To start the VM and run the sniffer in one command:
+```bash
+vagrant up && vagrant ssh -c 'sudo python3 /app/sniffer/sniffer.py --interface all'
+```
+
+Alternatively, join the VM:
+```bash
+vagrant ssh
+run-sniffer
+```
