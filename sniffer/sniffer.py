@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 
+import argparse
 import socket
+import sys
 from struct import unpack
 
 class L2Data:
@@ -144,6 +146,47 @@ def fmt_ip6addr(ip6_addr):
     return ':'.join(a+b+c+d if a+b+c+d != '0000' else '' for a,b,c,d in zip(t, t, t, t))
 
 def main():
+    parser = argparse.ArgumentParser(description='A simple python sniffer')
+    parser.add_argument('-i', '--interactive', action='store_true', help='Interactive mode to ask for options')
+    parser.add_argument('--interface', type=str, help='Interface name to sniff on (e.g., eth0, wlan0)')
+    args = parser.parse_args()
+
+    interface = args.interface
+
+    if args.interactive:
+        interfaces = socket.if_nameindex()
+        print("Available interfaces:")
+        for idx, name in interfaces:
+            print(f"  {idx}: {name}")
+        
+        while True:
+            choice = input(f"Enter interface name or index to sniff on ({interfaces[0][1]}): ").strip()
+            
+            # Default fallback if just hit Enter
+            if not choice:
+                interface = interfaces[0][1]
+                break
+                
+            # Check if it's an index or a generic name
+            if choice.isdigit():
+                idx = int(choice)
+                matched = [name for i, name in interfaces if i == idx]
+                if matched:
+                    interface = matched[0]
+                    break
+            else:
+                matched = [name for i, name in interfaces if name == choice]
+                if matched:
+                    interface = matched[0]
+                    break
+            
+            print("Invalid interface. Please try again.")
+
+    if not interface:
+        print("Error: Interface must be specified either via --interface or interactively using -i.")
+        parser.print_help()
+        sys.exit(1)
+
     s = socket.socket(
         socket.AF_PACKET,
         socket.SOCK_RAW,
@@ -151,7 +194,11 @@ def main():
     )
     frameCount=0
 
-    s.bind(('eth1', 3))
+    try:
+        s.bind((interface, 3))
+    except OSError as e:
+        print(f"Error binding to interface {interface}: {e}")
+        sys.exit(1)
 
     while True:
         message = s.recv(1024)
