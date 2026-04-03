@@ -59,17 +59,20 @@ class IPData:
 
             self.options = None
             if self.ihl > 5:
-                self.options = self.__ip_header[20 : 15 + self.ihl]
+                self.options = self.__ip_header[20 : self.ihl * 4]
+            self.payload = self.__ip_header[self.ihl * 4 :]
         elif self.version == 6:
             self.traff_class = self.__info[3:11]
             self.flow_lbl = self.__info[11:]
 
             self.payload_len = int(self.__frag_info[:2].hex(), 16)
             self.next_header = int(self.__frag_info[2:3].hex(), 16)
+            self.proto = self.next_header  # For compatibility with IPv4
             self.hop_limit = int(self.__frag_info[3:].hex(), 16)
 
             self.src_ip = fmt_ip6addr(self.__ip_header[8:24].hex())
             self.dst_ip = fmt_ip6addr(self.__ip_header[24:40].hex())
+            self.payload = self.__ip_header[40:]
 
     def __repr__(self):
         if self.version == 4:
@@ -108,6 +111,66 @@ class IPData:
                     self.dst_ip,
                 )
             )
+
+
+class TCPData:
+    def __init__(self, bytes):
+        self.__tcp_header = bytes
+        # TCP header is at least 20 bytes
+        self.src_port, self.dst_port, self.seq, self.ack, self.offset_reserved_flags = (
+            unpack("!HHLLH", self.__tcp_header[:14])
+        )
+        self.offset = (self.offset_reserved_flags >> 12) * 4
+        self.flags = self.offset_reserved_flags & 0x03F
+        self.window = unpack("!H", self.__tcp_header[14:16])[0]
+        self.checksum = self.__tcp_header[16:18].hex()
+        self.urgent_ptr = unpack("!H", self.__tcp_header[18:20])[0]
+
+        # Flags extraction
+        self.flag_urg = (self.flags & 0x20) >> 5
+        self.flag_ack = (self.flags & 0x10) >> 4
+        self.flag_psh = (self.flags & 0x08) >> 3
+        self.flag_rst = (self.flags & 0x04) >> 2
+        self.flag_syn = (self.flags & 0x02) >> 1
+        self.flag_fin = self.flags & 0x01
+
+        self.payload = self.__tcp_header[self.offset :]
+
+    def __repr__(self):
+        return (
+            "TCP: SRC_PORT: {}, DST_PORT: {}, SEQ: {}, ACK: {}\n"
+            "OFFSET: {}, FLAGS: [URG: {}, ACK: {}, PSH: {}, RST: {}, SYN: {}, FIN: {}]\n"
+            "WINDOW: {}, CHECKSUM: {}, URGENT_PTR: {}".format(
+                self.src_port,
+                self.dst_port,
+                self.seq,
+                self.ack,
+                self.offset,
+                self.flag_urg,
+                self.flag_ack,
+                self.flag_psh,
+                self.flag_rst,
+                self.flag_syn,
+                self.flag_fin,
+                self.window,
+                self.checksum,
+                self.urgent_ptr,
+            )
+        )
+
+
+class UDPData:
+    def __init__(self, bytes):
+        self.__udp_header = bytes
+        self.src_port, self.dst_port, self.length, self.checksum = unpack(
+            "!HHHH", self.__udp_header[:8]
+        )
+        self.payload = self.__udp_header[8:]
+
+    def __repr__(self):
+        return "UDP: SRC_PORT: {}, DST_PORT: {}, LENGTH: {}, CHECKSUM: {}".format(
+            self.src_port, self.dst_port, self.length, self.checksum
+        )
 
 
 class ArpData:
@@ -290,6 +353,13 @@ def main():
             ip_req = IPData(eth_payload)
             print()
             print(repr(ip_req))
+
+            if ip_req.proto == 6:
+                tcp_req = TCPData(ip_req.payload)
+                print(repr(tcp_req))
+            elif ip_req.proto == 17:
+                udp_req = UDPData(ip_req.payload)
+                print(repr(udp_req))
         elif eth_header.eth_type == "0806":
             arp_req = ArpData(eth_payload[:])
             print()
