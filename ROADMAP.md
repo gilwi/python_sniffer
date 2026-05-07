@@ -21,9 +21,9 @@ This roadmap outlines the planned evolution of the Python Sniffer project, movin
 - [ ] **Error Handling:**
     - [ ] Robust handling of malformed packets and truncated frames.
     - [ ] Add logging instead of direct `print` statements for better debugging.
-- [ ] **Performance:**
-    - [ ] Implement a producer-consumer pattern using `multiprocessing` or `threading` to separate packet capture from parsing/display.
-    - [ ] Zero-copy optimizations for byte slicing.
+- [x] **Performance:**
+    - [x] Implement a producer-consumer pattern using `multiprocessing` or `threading` to separate packet capture from parsing/display.
+    - [x] Zero-copy optimizations for byte slicing.
 - [ ] **Test Suite:**
     - [ ] Create a comprehensive unit test suite using mock packet data.
     - [ ] Integration tests using `scapy` or `ping` to generate known traffic.

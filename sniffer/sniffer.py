@@ -4,13 +4,15 @@ import argparse
 import socket
 import sys
 import time
+import multiprocessing
 from struct import pack, unpack
 
 
 class L2Data:
-    def __init__(self, bytes):
+    def __init__(self, data):
         # Retrieve ethernet header data for easier slicing
-        self.__eth_header = bytes
+        # data is a memoryview
+        self.__eth_header = data
 
         # Retrieve formatted string corresponding to
         # ethernet header information
@@ -26,49 +28,53 @@ class L2Data:
 
 class IPData:
 
-    def __init__(self, bytes):
+    def __init__(self, data):
 
         # Retrieve ethernet encapsulation data
-        self.__ip_header = bytes
+        # data is a memoryview
+        self.__ip_header = data
 
-        self.__info = bin(int(self.__ip_header.hex()[:3], 16))[2:]
-        self.__frag_info = self.__ip_header[4:8]
+        self.__info = bin(int(self.__ip_header[:2].hex(), 16))[2:].zfill(16)
 
-        self.version = int("0b" + self.__info[:3], 2)
+        self.version = int("0b" + self.__info[:4], 2)
         if self.version == 4:
 
-            self.ihl = int("0b" + self.__info[3:7], 2)
-            self.tos_dcsp = self.__info[7:11]
-            self.tos_ecn = self.__info[11:13]
+            self.ihl = int("0b" + self.__info[4:8], 2)
+            self.tos_dcsp = self.__info[8:14]
+            self.tos_ecn = self.__info[14:16]
 
-            self.congest = int("0b" + self.__info[13:15].zfill(4), 2)
-            self.len = self.__info[15:]
+            # Re-calculating fields with correct offsets for IPv4
+            # Length is 16 bits starting at byte 2
+            self.len = unpack("!H", self.__ip_header[2:4])[0]
 
-            self.__frag_info = bin(int(self.__ip_header.hex()[4:8], 16))[2:]
-            self.frag_id = int("0b" + self.__frag_info[:15], 2)
-            self.flags = int("0b" + self.__frag_info[15:18].zfill(4), 2)
-            self.frag_offset = int("0b" + self.__frag_info[18:].zfill(32), 2)
+            self.frag_id = unpack("!H", self.__ip_header[4:6])[0]
+            flags_offset = unpack("!H", self.__ip_header[6:8])[0]
+            self.flags = (flags_offset & 0xE000) >> 13
+            self.frag_offset = flags_offset & 0x1FFF
 
-            self.__pkt_info = self.__ip_header[8:12]
-            self.ttl = int(self.__pkt_info[:1].hex(), 16)
-            self.proto = int(self.__pkt_info[1:2].hex(), 16)
-            self.hdr_cksum = self.__pkt_info[2:].hex()
+            self.ttl = self.__ip_header[8]
+            self.proto = self.__ip_header[9]
+            self.hdr_cksum = self.__ip_header[10:12].hex()
 
-            self.src_ip = socket.inet_ntoa(self.__ip_header[12:16])
-            self.dst_ip = socket.inet_ntoa(self.__ip_header[16:20])
+            self.src_ip = socket.inet_ntoa(bytes(self.__ip_header[12:16]))
+            self.dst_ip = socket.inet_ntoa(bytes(self.__ip_header[16:20]))
 
             self.options = None
             if self.ihl > 5:
-                self.options = self.__ip_header[20 : self.ihl * 4]
+                self.options = self.__ip_header[20 : self.ihl * 4].hex()
             self.payload = self.__ip_header[self.ihl * 4 :]
         elif self.version == 6:
-            self.traff_class = self.__info[3:11]
-            self.flow_lbl = self.__info[11:]
+            # IPv6 version is 4 bits, Traffic Class 8 bits, Flow Label 20 bits
+            # Byte 0: [Version 4][Traffic Class 4]
+            # Byte 1: [Traffic Class 4][Flow Label 4]
+            # Byte 2-3: [Flow Label 16]
+            self.traff_class = self.__ip_header[:2].hex()[1:3]
+            self.flow_lbl = self.__ip_header[1:4].hex()[1:]
 
-            self.payload_len = int(self.__frag_info[:2].hex(), 16)
-            self.next_header = int(self.__frag_info[2:3].hex(), 16)
+            self.payload_len = unpack("!H", self.__ip_header[4:6])[0]
+            self.next_header = self.__ip_header[6]
             self.proto = self.next_header  # For compatibility with IPv4
-            self.hop_limit = int(self.__frag_info[3:].hex(), 16)
+            self.hop_limit = self.__ip_header[7]
 
             self.src_ip = fmt_ip6addr(self.__ip_header[8:24].hex())
             self.dst_ip = fmt_ip6addr(self.__ip_header[24:40].hex())
@@ -78,14 +84,13 @@ class IPData:
         if self.version == 4:
             return (
                 "VERSION: {}\nINTERNET HDR LENGTH: {}\nTOS: {} {}\n"
-                "CONGESTION: {}\nLEN: {}\nFRAG_ID: {}\nFLAGS: {}\n"
+                "LEN: {}\nFRAG_ID: {}\nFLAGS: {}\n"
                 "FRAG_OFFSET: {}\nTTL: {}\nPROTO: {}\nHDR_CKSUM: {}"
                 "\nSRC_IP: {}\nDST_IP: {}\nOPTIONS: {}\n".format(
                     self.version,
                     self.ihl,
                     self.tos_dcsp,
-                    self.tos_dcsp,
-                    self.congest,
+                    self.tos_ecn,
                     self.len,
                     self.frag_id,
                     self.flags,
@@ -114,8 +119,8 @@ class IPData:
 
 
 class TCPData:
-    def __init__(self, bytes):
-        self.__tcp_header = bytes
+    def __init__(self, data):
+        self.__tcp_header = data
         # TCP header is at least 20 bytes
         self.src_port, self.dst_port, self.seq, self.ack, self.offset_reserved_flags = (
             unpack("!HHLLH", self.__tcp_header[:14])
@@ -176,8 +181,8 @@ class TCPData:
 
 
 class UDPData:
-    def __init__(self, bytes):
-        self.__udp_header = bytes
+    def __init__(self, data):
+        self.__udp_header = data
         self.src_port, self.dst_port, self.length, self.checksum = unpack(
             "!HHHH", self.__udp_header[:8]
         )
@@ -190,8 +195,8 @@ class UDPData:
 
 
 class ICMPData:
-    def __init__(self, bytes):
-        self.__icmp_header = bytes
+    def __init__(self, data):
+        self.__icmp_header = data
         self.type, self.code, self.checksum = unpack("!BBH", self.__icmp_header[:4])
         self.payload = self.__icmp_header[4:]
 
@@ -212,65 +217,38 @@ class ICMPData:
 
 class ArpData:
 
-    def __init__(self, bytes):
+    def __init__(self, data):
 
         # Retrieve ethernet encapsulation data
-        self.__arp_hdr = bytes
+        self.__arp_hdr = data
 
         # Slice ARP header into separate bytes objects
-        self.hw_type = "".join(map(str, unpack("BB", self.__arp_hdr[:2])))
+        self.hw_type = unpack("!H", self.__arp_hdr[:2])[0]
         self.proto_type = self.__arp_hdr[2:4].hex()
-        self.hw_addr_len = int(self.__arp_hdr[4:5].hex(), 16)
-        self.proto_addr_len = int(self.__arp_hdr[5:6].hex(), 16)
-        self.ope = int(self.__arp_hdr[6:8].hex(), 8)
+        self.hw_addr_len = self.__arp_hdr[4]
+        self.proto_addr_len = self.__arp_hdr[5]
+        self.ope = unpack("!H", self.__arp_hdr[6:8])[0]
 
         self.src_hw_addr = fmt_macaddr(self.__arp_hdr[8 : 8 + self.hw_addr_len].hex())
+
+        # Source protocol address
+        spa_start = 8 + self.hw_addr_len
+        spa_end = spa_start + self.proto_addr_len
         self.src_proto_addr = ".".join(
-            map(
-                str,
-                unpack(
-                    "BBBB",
-                    self.__arp_hdr[
-                        8
-                        + self.hw_addr_len : 8
-                        + self.hw_addr_len
-                        + self.proto_addr_len
-                    ],
-                ),
-            )
+            map(str, bytes(self.__arp_hdr[spa_start:spa_end]))
         )
-        self.dst_hw_addr = fmt_macaddr(
-            self.__arp_hdr[
-                8
-                + self.hw_addr_len
-                + self.proto_addr_len : 8
-                + 2 * self.hw_addr_len
-                + self.proto_addr_len
-            ].hex()
+
+        # Destination hardware address
+        tha_start = spa_end
+        tha_end = tha_start + self.hw_addr_len
+        self.dst_hw_addr = fmt_macaddr(self.__arp_hdr[tha_start:tha_end].hex())
+
+        # Destination protocol address
+        tpa_start = tha_end
+        tpa_end = tpa_start + self.proto_addr_len
+        self.dst_proto_addr = ".".join(
+            map(str, bytes(self.__arp_hdr[tpa_start:tpa_end]))
         )
-        self.dst_proto_addr = self.__arp_hdr[
-            8
-            + 2 * self.hw_addr_len
-            + self.proto_addr_len : 8
-            + 2 * self.hw_addr_len
-            + 2 * self.proto_addr_len
-        ].hex()
-        if len(self.dst_proto_addr) != 0:
-            self.dst_proto_addr = ".".join(
-                map(
-                    str,
-                    unpack(
-                        "BBBB",
-                        self.__arp_hdr[
-                            8
-                            + 2 * self.hw_addr_len
-                            + self.proto_addr_len : 8
-                            + 2 * self.hw_addr_len
-                            + 2 * self.proto_addr_len
-                        ],
-                    ),
-                )
-            )
 
     def __repr__(self):
         return (
@@ -404,9 +382,10 @@ def setup_socket(interface):
     return s
 
 
-def matches_filter(message, proto_filter, port_filter):
-    eth_header = L2Data(message[:14])
-    eth_payload = message[14:]
+def matches_filter(data, proto_filter, port_filter):
+    # data is a memoryview
+    eth_header = L2Data(data[:14])
+    eth_payload = data[14:]
 
     actual_proto = None
     ports = []
@@ -434,10 +413,11 @@ def matches_filter(message, proto_filter, port_filter):
     return True
 
 
-def handle_frame(message, addr, frame_id):
+def handle_frame(data, addr, frame_id):
+    # data is a memoryview
     if_name = addr[0]
-    eth_header = L2Data(message[:14])
-    eth_payload = message[14:]
+    eth_header = L2Data(data[:14])
+    eth_payload = data[14:]
 
     print()
     print("-" * 100)
@@ -459,9 +439,68 @@ def handle_frame(message, addr, frame_id):
             icmp_req = ICMPData(ip_req.payload)
             print(repr(icmp_req))
     elif eth_header.eth_type == "0806":
-        arp_req = ArpData(eth_payload[:])
+        arp_req = ArpData(eth_payload)
         print()
         print(repr(arp_req))
+
+
+def capture_worker(interface, queue, stop_event):
+    s = setup_socket(interface)
+    print(f"Sniffing on {'all interfaces' if not interface else interface}...")
+
+    try:
+        while not stop_event.is_set():
+            # Use a timeout if possible, but raw sockets might block
+            # For now, we'll let it block or use a small timeout if we had it
+            message, addr = s.recvfrom(65535)
+            # Add to queue as (bytes, addr)
+            queue.put((message, addr))
+    except Exception as e:
+        if not stop_event.is_set():
+            print(f"Capture error: {e}")
+    finally:
+        s.close()
+
+
+def parser_worker(args, queue, stop_event):
+    frameCount = 0
+    matchedCount = 0
+    pcap_exporter = None
+
+    if args.output:
+        pcap_exporter = PcapExporter(args.output)
+        print(f"Exporting to {args.output}...")
+
+    try:
+        while not stop_event.is_set() or not queue.empty():
+            try:
+                # Use a timeout to avoid blocking forever if stop_event is set
+                packet_info = queue.get(timeout=0.1)
+                message, addr = packet_info
+
+                # Zero-copy optimization: use memoryview
+                data = memoryview(message)
+
+                if matches_filter(data, args.proto, args.port):
+                    handle_frame(data, addr, frameCount)
+                    if pcap_exporter:
+                        pcap_exporter.write_packet(message)
+                    matchedCount += 1
+
+                frameCount += 1
+
+                if args.count != 0 and matchedCount >= args.count:
+                    print(f"\nCaptured {args.count} matching frames. Exiting.")
+                    stop_event.set()
+                    break
+
+            except multiprocessing.queues.Empty:
+                continue
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if pcap_exporter:
+            pcap_exporter.close()
 
 
 def main():
@@ -474,37 +513,30 @@ def main():
     if interface == "all":
         interface = ""
 
-    s = setup_socket(interface)
-    frameCount = 0
-    matchedCount = 0
+    queue = multiprocessing.Queue()
+    stop_event = multiprocessing.Event()
 
-    pcap_exporter = None
-    if args.output:
-        pcap_exporter = PcapExporter(args.output)
-        print(f"Exporting to {args.output}...")
+    capture_proc = multiprocessing.Process(
+        target=capture_worker, args=(interface, queue, stop_event)
+    )
+    parser_proc = multiprocessing.Process(
+        target=parser_worker, args=(args, queue, stop_event)
+    )
 
-    print(f"Sniffing on {'all interfaces' if not interface else interface}...")
+    capture_proc.start()
+    parser_proc.start()
 
     try:
-        while True:
-            if args.count != 0 and matchedCount >= args.count:
-                print(f"\nCaptured {args.count} matching frames. Exiting.")
-                break
-
-            message, addr = s.recvfrom(65535)
-
-            if matches_filter(message, args.proto, args.port):
-                handle_frame(message, addr, frameCount)
-                if pcap_exporter:
-                    pcap_exporter.write_packet(message)
-                matchedCount += 1
-
-            frameCount += 1
+        while parser_proc.is_alive():
+            parser_proc.join(timeout=0.5)
     except KeyboardInterrupt:
         print("\nStopping sniffer...")
+        stop_event.set()
     finally:
-        if pcap_exporter:
-            pcap_exporter.close()
+        # Give some time for workers to clean up
+        capture_proc.terminate()
+        capture_proc.join()
+        parser_proc.join()
         sys.exit(0)
 
 
