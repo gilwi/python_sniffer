@@ -5,11 +5,11 @@ This roadmap outlines the planned evolution of the Python Sniffer project, movin
 ## Phase 1: Core Protocol Expansion (Short Term)
 *Goal: Support the most common transport and control protocols.*
 
-- [ ] **Transport Layer Parsing:**
-    - [ ] Implement `TCPData` class (Flags, Ports, Sequence numbers).
-    - [ ] Implement `UDPData` class (Ports, Length, Checksum).
-- [ ] **ICMP Support:**
-    - [ ] Parse ICMP types and codes (Echo Request/Reply, Destination Unreachable).
+- [x] **Transport Layer Parsing:**
+    - [x] Implement `TCPData` class (Flags, Ports, Sequence numbers).
+    - [x] Implement `UDPData` class (Ports, Length, Checksum).
+- [x] **ICMP Support:**
+    - [x] Parse ICMP types and codes (Echo Request/Reply, Destination Unreachable).
 - [ ] **Persistence:**
     - [ ] Add PCAP (Packet Capture) file export support using `struct` to write standard header formats.
 - [ ] **Filtering:**

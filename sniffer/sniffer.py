@@ -121,12 +121,16 @@ class TCPData:
             unpack("!HHLLH", self.__tcp_header[:14])
         )
         self.offset = (self.offset_reserved_flags >> 12) * 4
-        self.flags = self.offset_reserved_flags & 0x03F
+        self.flags = self.offset_reserved_flags & 0x1FF  # 9 bits of flags
+
         self.window = unpack("!H", self.__tcp_header[14:16])[0]
         self.checksum = self.__tcp_header[16:18].hex()
         self.urgent_ptr = unpack("!H", self.__tcp_header[18:20])[0]
 
         # Flags extraction
+        self.flag_ns = (self.flags & 0x100) >> 8
+        self.flag_cwr = (self.flags & 0x80) >> 7
+        self.flag_ece = (self.flags & 0x40) >> 6
         self.flag_urg = (self.flags & 0x20) >> 5
         self.flag_ack = (self.flags & 0x10) >> 4
         self.flag_psh = (self.flags & 0x08) >> 3
@@ -134,27 +138,39 @@ class TCPData:
         self.flag_syn = (self.flags & 0x02) >> 1
         self.flag_fin = self.flags & 0x01
 
+        self.options = None
+        if self.offset > 20:
+            self.options = self.__tcp_header[20 : self.offset].hex()
+
         self.payload = self.__tcp_header[self.offset :]
 
     def __repr__(self):
+        flags_str = "[NS: {}, CWR: {}, ECE: {}, URG: {}, ACK: {}, PSH: {}, RST: {}, SYN: {}, FIN: {}]".format(
+            self.flag_ns,
+            self.flag_cwr,
+            self.flag_ece,
+            self.flag_urg,
+            self.flag_ack,
+            self.flag_psh,
+            self.flag_rst,
+            self.flag_syn,
+            self.flag_fin,
+        )
         return (
             "TCP: SRC_PORT: {}, DST_PORT: {}, SEQ: {}, ACK: {}\n"
-            "OFFSET: {}, FLAGS: [URG: {}, ACK: {}, PSH: {}, RST: {}, SYN: {}, FIN: {}]\n"
-            "WINDOW: {}, CHECKSUM: {}, URGENT_PTR: {}".format(
+            "OFFSET: {}, FLAGS: {}\n"
+            "WINDOW: {}, CHECKSUM: {}, URGENT_PTR: {}\n"
+            "OPTIONS: {}".format(
                 self.src_port,
                 self.dst_port,
                 self.seq,
                 self.ack,
                 self.offset,
-                self.flag_urg,
-                self.flag_ack,
-                self.flag_psh,
-                self.flag_rst,
-                self.flag_syn,
-                self.flag_fin,
+                flags_str,
                 self.window,
                 self.checksum,
                 self.urgent_ptr,
+                self.options,
             )
         )
 
@@ -168,7 +184,7 @@ class UDPData:
         self.payload = self.__udp_header[8:]
 
     def __repr__(self):
-        return "UDP: SRC_PORT: {}, DST_PORT: {}, LENGTH: {}, CHECKSUM: {}".format(
+        return "UDP: SRC_PORT: {}, DST_PORT: {}, LENGTH: {}, CHECKSUM: {:04x}".format(
             self.src_port, self.dst_port, self.length, self.checksum
         )
 

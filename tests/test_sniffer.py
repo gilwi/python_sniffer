@@ -21,14 +21,14 @@ from sniffer.sniffer import (
 def test_parse_args_defaults():
     args = parse_args([])
     assert args.count == 0
-    assert args.interface is None
+    assert args.interface == "all"
     assert args.interactive is False
 
 
 @pytest.mark.parametrize(
     "args_list, expected_count, expected_interface",
     [
-        (["--count", "10"], 10, None),
+        (["--count", "10"], 10, "all"),
         (["--interface", "eth0"], 0, "eth0"),
         (["-c", "5", "--interface", "lo"], 5, "lo"),
     ],
@@ -58,6 +58,18 @@ UDP_PACKET_HEX = (
     "12345678"  # UDP: Src Port 4660, Dst Port 22136
     "000c0000"  # UDP: Len 12, Checksum
     "68656c6c6f"  # Payload: "hello"
+)
+
+# TCP header: Src Port 1234, Dst Port 80, Seq 1, Ack 0, Offset 5 (20 bytes), Flags 0x02 (SYN)
+TCP_HEADER_HEX = (
+    "04d2"  # Src Port 1234
+    "0050"  # Dst Port 80
+    "00000001"  # Seq 1
+    "00000000"  # Ack 0
+    "5002"  # Offset 5, Reserved 0, Flags 0x02 (SYN)
+    "faf0"  # Window 64240
+    "0000"  # Checksum (ignored for now)
+    "0000"  # Urgent Pointer 0
 )
 
 # Ethernet (14 bytes) + ARP (28 bytes)
@@ -108,9 +120,56 @@ def test_udp_parsing():
     assert udp.length == 8
 
 
+def test_tcp_parsing():
+    data = bytes.fromhex(TCP_HEADER_HEX)
+    tcp = TCPData(data)
+    assert tcp.src_port == 1234
+    assert tcp.dst_port == 80
+    assert tcp.seq == 1
+    assert tcp.ack == 0
+    assert tcp.offset == 20
+    assert tcp.flag_syn == 1
+    assert tcp.flag_ack == 0
+
+
 def test_icmp_parsing():
     # 4 bytes ICMP header: Type 8 (Echo Request), Code 0, Checksum 0xf7ff
     data = bytes.fromhex("0800f7ff")
     icmp = ICMPData(data)
     assert icmp.type == 8
     assert "Echo Request" in repr(icmp)
+
+
+def test_tcp_parsing_with_flags_and_options():
+    # TCP header: Src Port 1234, Dst Port 80, Seq 1, Ack 0,
+    # Offset 8 (32 bytes -> 12 bytes of options), Flags 0x1C2 (NS, CWR, ECE, SYN)
+    # 0x1C2 = 0b111000010
+    # Flags: NS (1), CWR (1), ECE (1), URG (0), ACK (0), PSH (0), RST (0), SYN (1), FIN (0)
+    tcp_header_hex = (
+        "04d2"  # Src Port 1234
+        "0050"  # Dst Port 80
+        "00000001"  # Seq 1
+        "00000000"  # Ack 0
+        "81c2"  # Offset 8, Reserved 0, Flags 0x1C2
+        "faf0"  # Window 64240
+        "0000"  # Checksum
+        "0000"  # Urgent Pointer
+        "020405b40103030801010402"  # 12 bytes of options (MSS, WScale, SACK Permitted)
+    )
+    data = bytes.fromhex(tcp_header_hex)
+    tcp = TCPData(data)
+    assert tcp.src_port == 1234
+    assert tcp.dst_port == 80
+    assert tcp.offset == 32
+    assert tcp.flag_ns == 1
+    assert tcp.flag_cwr == 1
+    assert tcp.flag_ece == 1
+    assert tcp.flag_syn == 1
+    assert tcp.flag_fin == 0
+    assert tcp.options == "020405b40103030801010402"
+
+
+def test_udp_repr_checksum_hex():
+    data = bytes.fromhex("04d2162e0008abcd")
+    udp = UDPData(data)
+    assert "CHECKSUM: abcd" in repr(udp)
