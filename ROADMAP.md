@@ -10,10 +10,10 @@ This roadmap outlines the planned evolution of the Python Sniffer project, movin
     - [x] Implement `UDPData` class (Ports, Length, Checksum).
 - [x] **ICMP Support:**
     - [x] Parse ICMP types and codes (Echo Request/Reply, Destination Unreachable).
-- [ ] **Persistence:**
-    - [ ] Add PCAP (Packet Capture) file export support using `struct` to write standard header formats.
-- [ ] **Filtering:**
-    - [ ] Implement basic BPF-like filtering via command line (e.g., `--proto tcp`, `--port 80`).
+- [x] **Persistence:**
+    - [x] Add PCAP (Packet Capture) file export support using `struct` to write standard header formats.
+- [x] **Filtering:**
+    - [x] Implement basic BPF-like filtering via command line (e.g., `--proto tcp`, `--port 80`).
 
 ## Phase 2: Technical Robustness & Performance (Mid Term)
 *Goal: Improve reliability and handling of high-traffic scenarios.*

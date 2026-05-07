@@ -3,20 +3,20 @@
 import argparse
 import socket
 import sys
-from struct import unpack
+import time
+from struct import pack, unpack
 
 
 class L2Data:
     def __init__(self, bytes):
         # Retrieve ethernet header data for easier slicing
         self.__eth_header = bytes
-        # self.eth_fcs = self.bytes[-4:]
 
         # Retrieve formatted string corresponding to
         # ethernet header information
         self.dst_mac = fmt_macaddr(self.__eth_header[:6].hex())
-        self.src_mac = fmt_macaddr(self.__eth_header[6:-2].hex())
-        self.eth_type = self.__eth_header[-2:].hex()
+        self.src_mac = fmt_macaddr(self.__eth_header[6:12].hex())
+        self.eth_type = self.__eth_header[12:14].hex()
 
     def __repr__(self):
         return "DST_MAC: {}\nSRC_MAC: {}\nETH_TYPE: {}".format(
@@ -289,6 +289,31 @@ class ArpData:
         )
 
 
+class PcapExporter:
+    def __init__(self, filename):
+        self.filename = filename
+        self.file = open(filename, "wb")
+        # Global Header: magic(I), v_maj(H), v_min(H), zone(i), sig(I), snap(I), net(I)
+        # Using little-endian (<) as it's common
+        global_header = pack("<IHHiiII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1)
+        self.file.write(global_header)
+
+    def write_packet(self, data):
+        ts = time.time()
+        ts_sec = int(ts)
+        ts_usec = int((ts - ts_sec) * 1000000)
+        incl_len = len(data)
+        orig_len = len(data)
+        # Packet Header: ts_sec(I), ts_usec(I), incl_len(I), orig_len(I)
+        packet_header = pack("<IIII", ts_sec, ts_usec, incl_len, orig_len)
+        self.file.write(packet_header)
+        self.file.write(data)
+        self.file.flush()
+
+    def close(self):
+        self.file.close()
+
+
 def fmt_macaddr(mac_addr):
     # Retrieve str hex form of received bytes
     t = iter(mac_addr)
@@ -327,6 +352,15 @@ def parse_args(args_in):
         default=0,
         help="Number of frames to capture (0 for infinite)",
     )
+    parser.add_argument(
+        "-p",
+        "--proto",
+        type=str,
+        choices=["tcp", "udp", "icmp", "arp"],
+        help="Filter by protocol",
+    )
+    parser.add_argument("--port", type=int, help="Filter by port (TCP/UDP)")
+    parser.add_argument("-o", "--output", type=str, help="Output PCAP file path")
     return parser.parse_args(args_in)
 
 
@@ -370,10 +404,40 @@ def setup_socket(interface):
     return s
 
 
+def matches_filter(message, proto_filter, port_filter):
+    eth_header = L2Data(message[:14])
+    eth_payload = message[14:]
+
+    actual_proto = None
+    ports = []
+
+    if eth_header.eth_type in ["0800", "86dd"]:
+        ip_req = IPData(eth_payload)
+        if ip_req.proto == 6:
+            actual_proto = "tcp"
+            tcp_req = TCPData(ip_req.payload)
+            ports = [tcp_req.src_port, tcp_req.dst_port]
+        elif ip_req.proto == 17:
+            actual_proto = "udp"
+            udp_req = UDPData(ip_req.payload)
+            ports = [udp_req.src_port, udp_req.dst_port]
+        elif ip_req.proto == 1:
+            actual_proto = "icmp"
+    elif eth_header.eth_type == "0806":
+        actual_proto = "arp"
+
+    if proto_filter and actual_proto != proto_filter:
+        return False
+    if port_filter and port_filter not in ports:
+        return False
+
+    return True
+
+
 def handle_frame(message, addr, frame_id):
     if_name = addr[0]
     eth_header = L2Data(message[:14])
-    eth_payload = message[14:-4]
+    eth_payload = message[14:]
 
     print()
     print("-" * 100)
@@ -412,20 +476,35 @@ def main():
 
     s = setup_socket(interface)
     frameCount = 0
+    matchedCount = 0
+
+    pcap_exporter = None
+    if args.output:
+        pcap_exporter = PcapExporter(args.output)
+        print(f"Exporting to {args.output}...")
 
     print(f"Sniffing on {'all interfaces' if not interface else interface}...")
 
     try:
         while True:
-            if args.count != 0 and frameCount >= args.count:
-                print(f"\nCaptured {args.count} frames. Exiting.")
+            if args.count != 0 and matchedCount >= args.count:
+                print(f"\nCaptured {args.count} matching frames. Exiting.")
                 break
 
             message, addr = s.recvfrom(65535)
-            handle_frame(message, addr, frameCount)
+
+            if matches_filter(message, args.proto, args.port):
+                handle_frame(message, addr, frameCount)
+                if pcap_exporter:
+                    pcap_exporter.write_packet(message)
+                matchedCount += 1
+
             frameCount += 1
     except KeyboardInterrupt:
         print("\nStopping sniffer...")
+    finally:
+        if pcap_exporter:
+            pcap_exporter.close()
         sys.exit(0)
 
 

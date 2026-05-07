@@ -15,7 +15,53 @@ from sniffer.sniffer import (
     TCPData,
     UDPData,
     ICMPData,
+    matches_filter,
+    PcapExporter,
 )
+
+
+def test_matches_filter():
+    udp_packet = bytes.fromhex(UDP_PACKET_HEX)
+    arp_packet = bytes.fromhex(ARP_PACKET_HEX)
+
+    # Proto filter
+    assert matches_filter(udp_packet, "udp", None) is True
+    assert matches_filter(udp_packet, "tcp", None) is False
+    assert matches_filter(arp_packet, "arp", None) is True
+    assert matches_filter(arp_packet, "udp", None) is False
+
+    # Port filter (UDP 4660 / 22136)
+    assert matches_filter(udp_packet, None, 4660) is True
+    assert matches_filter(udp_packet, None, 22136) is True
+    assert matches_filter(udp_packet, None, 80) is False
+
+    # Combined filter
+    assert matches_filter(udp_packet, "udp", 4660) is True
+    assert matches_filter(udp_packet, "udp", 80) is False
+
+
+def test_pcap_exporter(tmp_path):
+    pcap_file = tmp_path / "test.pcap"
+    exporter = PcapExporter(str(pcap_file))
+    packet = bytes.fromhex(UDP_PACKET_HEX)
+    exporter.write_packet(packet)
+    exporter.close()
+
+    assert pcap_file.exists()
+    with open(pcap_file, "rb") as f:
+        header = f.read(24)
+        assert len(header) == 24
+        # Magic number 0xA1B2C3D4 in little-endian
+        assert header[:4] == b"\xd4\xc3\xb2\xa1"
+
+        packet_header = f.read(16)
+        assert len(packet_header) == 16
+        # incl_len and orig_len should be 47 (0x2f)
+        assert packet_header[8:12] == b"\x2f\x00\x00\x00"
+        assert packet_header[12:16] == b"\x2f\x00\x00\x00"
+
+        packet_data = f.read()
+        assert packet_data == packet
 
 
 def test_parse_args_defaults():
